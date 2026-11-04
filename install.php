@@ -1,5 +1,5 @@
 <?php
-// One-click installer for TheVibe Fragrances.
+// One-click installer for TheVibe Fragrances (TiDB Cloud Compatible)
 // Open this page once in your browser, then DELETE this file.
 require_once __DIR__ . '/config.php';
 
@@ -9,39 +9,61 @@ $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     mysqli_report(MYSQLI_REPORT_OFF);
-    $c = @new mysqli(DB_HOST, DB_USER, DB_PASS);
-    if ($c->connect_errno) {
-        $error = 'Cannot connect to MySQL: ' . $c->connect_error . '. Check DB_HOST / DB_USER / DB_PASS in config.php.';
+    
+    // Initialize MySQLi client and enable SSL required by TiDB Cloud
+    $c = mysqli_init();
+    $c->ssl_set(NULL, NULL, NULL, NULL, NULL);
+    
+    // Connect using host, user, password, empty db, port, and SSL client flag
+    $port = defined('DB_PORT') ? DB_PORT : 4000;
+    $connected = @$c->real_connect(DB_HOST, DB_USER, DB_PASS, '', $port, NULL, MYSQLI_CLIENT_SSL);
+
+    if (!$connected || $c->connect_errno) {
+        $error = 'Cannot connect to TiDB Cloud: ' . $c->connect_error . '. Check DB_HOST / DB_USER / DB_PASS / DB_PORT in config.php.';
     } else {
         $c->set_charset('utf8mb4');
         $c->query('CREATE DATABASE IF NOT EXISTS `' . DB_NAME . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+        
         if (!$c->select_db(DB_NAME)) {
             $error = 'Could not create/select database: ' . $c->error;
         } else {
             $log[] = 'Database "' . DB_NAME . '" ready.';
-            $sql = file_get_contents(__DIR__ . '/database.sql');
-            if ($c->multi_query($sql)) {
-                do {
-                    if ($res = $c->store_result()) {
-                        $res->free();
-                    }
-                } while ($c->more_results() && $c->next_result());
-            }
-            if ($c->errno) {
-                $error = 'SQL error: ' . $c->error;
+            
+            $sqlFile = __DIR__ . '/database.sql';
+            if (!file_exists($sqlFile)) {
+                $error = 'database.sql file not found in the directory.';
             } else {
-                $log[] = 'Tables and starter data created.';
-                $user = trim($_POST['username'] ?? 'admin') ?: 'admin';
-                $pass = $_POST['password'] ?? '';
-                if (strlen($pass) < 6) {
-                    $pass = 'admin123';
+                $sql = file_get_contents($sqlFile);
+                if ($c->multi_query($sql)) {
+                    do {
+                        if ($res = $c->store_result()) {
+                            $res->free();
+                        }
+                    } while ($c->more_results() && $c->next_result());
                 }
-                $hash = password_hash($pass, PASSWORD_DEFAULT);
-                $st = $c->prepare('INSERT INTO admins (username, password) VALUES (?, ?) ON DUPLICATE KEY UPDATE password = VALUES(password)');
-                $st->bind_param('ss', $user, $hash);
-                $st->execute();
-                $log[] = 'Admin account "' . htmlspecialchars($user) . '" saved.';
-                $ok = true;
+                
+                if ($c->errno) {
+                    $error = 'SQL import error: ' . $c->error;
+                } else {
+                    $log[] = 'Tables and starter data created successfully.';
+                    
+                    $user = trim($_POST['username'] ?? 'admin') ?: 'admin';
+                    $pass = $_POST['password'] ?? '';
+                    if (strlen($pass) < 6) {
+                        $pass = 'admin123';
+                    }
+                    $hash = password_hash($pass, PASSWORD_DEFAULT);
+                    
+                    $st = $c->prepare('INSERT INTO admins (username, password) VALUES (?, ?) ON DUPLICATE KEY UPDATE password = VALUES(password)');
+                    if ($st) {
+                        $st->bind_param('ss', $user, $hash);
+                        $st->execute();
+                        $st->close();
+                        $log[] = 'Admin account "' . htmlspecialchars($user) . '" saved.';
+                    }
+                    
+                    $ok = true;
+                }
             }
         }
     }
@@ -69,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body>
 <div class="box">
   <h1>The Vibe Fragrances</h1>
-  <p>Installer – creates the database, tables, sample products and your admin login.</p>
+  <p>Installer – securely connects to TiDB Cloud, sets up tables, sample products, and your admin login.</p>
   <?php if ($error): ?><div class="err"><?= htmlspecialchars($error) ?></div><?php endif; ?>
   <?php if ($ok): ?>
     <div class="ok"><strong>Installation complete!</strong><ul><?php foreach ($log as $l) echo '<li>' . $l . '</li>'; ?></ul></div>
@@ -84,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <input name="password" type="password" placeholder="admin123" >
       <button type="submit">Install Now</button>
     </form>
-    <p style="margin-top:18px">Database: <code><?= htmlspecialchars(DB_NAME) ?></code> on <code><?= htmlspecialchars(DB_HOST) ?></code>. Change in <code>config.php</code> if needed.</p>
+    <p style="margin-top:18px">Database: <code><?= htmlspecialchars(DB_NAME) ?></code> on TiDB Cloud port <code><?= htmlspecialchars(defined('DB_PORT') ? DB_PORT : 4000) ?></code>.</p>
   <?php endif; ?>
 </div>
 </body>
